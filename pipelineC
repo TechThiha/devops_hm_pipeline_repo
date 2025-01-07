@@ -1,0 +1,139 @@
+pipeline {
+    agent any
+
+    environment {
+        warnings_file = "doxygen_warnings.log"
+        output_dir = "documentation"
+        output_doc = "documentation/html" 
+        doc_name = "doc.tar.gz"
+        parser_script = "python_script/doxygen_log_parser.py" 
+        report_file = "warnings_report.csv"
+    }
+
+    stages {
+
+        stage('Clone Repository') {
+            steps {
+                dir('grpc_doc') {
+                    git branch: 'master', url: 'https://github.com/TechThiha/grpc.git'
+                }
+            }
+        }
+
+        stage('Edit Doxygen config file') {
+            steps {
+                script {
+                    sh """
+                        mkdir -p ${output_doc} 
+                        doxygen -g
+                        sed -i 's|INPUT                  =|INPUT                  = grpc_doc/src|' Doxyfile
+                        sed -i 's|GENERATE_HTML          = YES|GENERATE_HTML          = YES|' Doxyfile
+                        sed -i 's|RECURSIVE              = NO|RECURSIVE              = YES|' Doxyfile
+                        sed -i 's|OUTPUT_DIRECTORY       =|OUTPUT_DIRECTORY       = ${output_dir}|' Doxyfile
+                        sed -i 's|GENERATE_LATEX         = YES|GENERATE_LATEX         = NO|' Doxyfile
+                    """
+                }
+            }
+        }
+
+        stage('Generate Doxygen Documentation') {
+            steps {
+                script {
+                    sh '''
+                    doxygen Doxyfile
+                    '''
+                }
+            }
+        }
+
+        stage('Publish Doxygen Documentation') {
+            steps {
+                script {
+                    sh '''
+                        ls -R ${output_doc}
+                    '''
+                }
+                publishHTML(target : [allowMissing: false,
+                    alwaysLinkToLastBuild: true,
+                    reportName: 'Doxygen Documentation', 
+                    keepAll: true,
+                    reportDir: "${output_doc}",
+                    reportFiles: 'index.html',
+                ])
+            }
+        }
+        stage('Pack Doxygen Documentation') {
+            steps {
+                script {
+                    sh """
+                    ls -R ${output_doc}
+                    tar -czf ${doc_name} -C ${output_doc} .
+                    """
+                }
+            }
+        }
+
+        stage('Archive Artifacts') {
+            steps {
+                archiveArtifacts artifacts: "${doc_name}", allowEmptyArchive: true
+            }
+        }
+
+        stage('Edit Doxygen config file for warning logs') {
+            steps {
+                script {
+                    sh """
+                        sed -i 's|WARN_LOGFILE           =|WARN_LOGFILE           = ${warnings_file}|' Doxyfile
+                    """
+                }
+            }
+        }
+ 
+        stage('Generate Doxygen Documentation for warning logs') {
+            steps {
+                script {
+                    sh '''
+                    doxygen Doxyfile
+                    '''
+                }
+            }
+        }
+
+        stage('git checkout') {
+            steps {
+                dir('python_script') {
+                    git branch: 'main', url: 'https://github.com/TechThiha/devops_hm_repoC.git', credentialsId: "github"
+                }
+            }
+        }
+
+        stage('Parse Doxygen Warnings') {
+            steps {
+                script {
+                    sh """
+                        chmod +x ${parser_script}
+                        python3 ${parser_script} ${warnings_file} --output ${report_file}
+                    """
+                }
+            }
+        }
+ 
+        stage('Archive report CSV') {
+            steps {
+                archiveArtifacts artifacts: "${report_file}", allowEmptyArchive: true
+            }
+        }
+    }
+ 
+    post {
+        always {
+            deleteDir()
+        }
+        success {
+            echo 'Pipeline executed successfully.'
+        }
+        failure {
+            echo 'Pipeline failed. Check logs for errors.'
+        }
+    }
+}
